@@ -1,7 +1,7 @@
 //inclusions
 #include <Wire.h>
 #include <NativeEthernet.h>
-#include <AppleMIDI.h>
+#include <AppleMIDI.h> //ver 2.1
 #include <SPI.h>
 #include <SD.h>
 //end inclussions
