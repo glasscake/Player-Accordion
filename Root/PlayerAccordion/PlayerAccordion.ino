@@ -1,7 +1,7 @@
 //inclusions
 #include <Wire.h>
 #include <NativeEthernet.h>
-#include <AppleMIDI.h> //ver 2.1
+#include <AppleMIDI.h> //ver 3.2
 #include <SPI.h>
 #include <SD.h>
 //end inclussions
@@ -44,13 +44,23 @@ int Mic = A9;
 #define RHC 3       //right hand channel
 #define LHC 4       //left hand channel
 
-#define LPNL 36      //lowest playable midi note - Left Hand
-#define HPNL 81      //highest playable midi note - Left Hand
-#define LPNR 53      //lowest playable midi note - Right Hand
-#define HPNR 93      //highest playable midi note - Right Hand
+#define LPNL 36      //lowest playable midi note - Left Hand (bass/button)
+#define HPNL 71      //highest playable midi note - Left Hand
+#define LPNR 53      //lowest playable midi note - Right Hand (piano)
+#define HPNR 93      //highest playable midi note - Right Hand 
 //end inclusions
 
-byte BassMap[24] = {5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6, 17, 16, 15, 14, 25, 12, 23, 22, 21, 20, 19, 18};
+//this remaps a note to a servo
+//note 53 is called, subtract lowest playable note
+//53-53 = 0 go to map position to find servo that plays that note
+//PianoMap[0] = 0
+//servo zero plays note zero
+//useful for servo drives that burn out a single chanel
+//also since the bass section plays multiple notes per key it maps notes to the same servo
+#define BMapLen 36
+#define PMapLen 41
+int BassMap[BMapLen];
+int PianoMap[PMapLen];
 
 //global variables
 int ServoMedian = 280;
@@ -124,7 +134,7 @@ void loop()
   }
   //end serial monitor
   #ifdef ENABLEeth
-    CheckNotes(8);  //check a number of servo boards at a time
+    CheckNotes(8);  //check a number of servos at a time
     MIDI.read();    //read any midi messages on the third channel in the que for the piano/right hand
   #endif
   //end loop
@@ -176,41 +186,36 @@ void MidiNoteOn(byte channel, byte note, byte velocity) //function called when r
   //dbprint("CT:");dbprint(CurrentMillis);dbprint(" MidiNoteOn: ");dbprint(channel);dbprint(", ");dbprintln(note);
   if (channel == RHC or channel == LHC) {
     bool Procede = false;
+    byte servo = 0;
     if (channel == LHC) {
       //dbprint("CT:");dbprint(CurrentMillis);dbprintln("channel == LHC");
       if (note >= LPNL and note <= HPNL) //test for playable notes on the left hand
       {
         //dbprint("CT:");dbprint(CurrentMillis);dbprintln(" note >= LPNL and note <= HPNL");
-        int lefthandnote = note;
-        note = note % 12;
-        if (lefthandnote >= 60 and lefthandnote <= 71) //range for bank 4
-        {
-          //dbprintln("note >= 60 and note <= 71");
-          note = note + 12;
-        }
+        
         //apply map array
-        note = BassMap[note] + 45; //offset for base servos
+        servo = BassMap[note - LPNL] ; //offset lowest playable note
         Procede = true;
       }
-    } else if (note >= LPNR and note <= HPNR) //test for playable notes on the right hand
+    }
+    else if (note >= LPNR and note <= HPNR) //test for playable notes on the right hand
     {
       //dbprint("CT:");dbprint(CurrentMillis);dbprintln(" note >= LPNR and note <= HPNR");
-      note = note - LPNR;
+      //apply the map array
+      servo = PianoMap[note - LPNR]; 
       Procede = true;
     }
     if (Procede == true) {
       //dbprintln("Procede == true");
-      IOEOnByteTimer[note] = CurrentMillis + OnTimeMod[note];
-      if (IOEOnByteTimer[note] < IOEOffByteTimer[note] + OnTimeMod[note] + OffTimeMod[note]) {
-        //dbprintln("IOEOnByteTimer[note] < IOEOffByteTimer[note] + OnTimeMod[note] + OffTimeMod[note]");
-        if (IOEOnByteTimer[note] < IOEOffByteTimer[note]) {
-          //dbprintln("IOEOnByteTimer[note] < IOEOffByteTimer[note]");
-          IOEOffByteTimer[note] = IOEOnByteTimer[note] - OffTimeMod[note] - 5;
+      IOEOnByteTimer[servo] = CurrentMillis + OnTimeMod[servo];
+      if (IOEOnByteTimer[servo] < IOEOffByteTimer[servo] + OnTimeMod[servo] + OffTimeMod[servo]) {
+        if (IOEOnByteTimer[servo] < IOEOffByteTimer[servo]) {
+          IOEOffByteTimer[servo] = IOEOnByteTimer[servo] - OffTimeMod[servo] - 5;
         } else {
           //dbprintln("else");
           //subtract the time required to turn the note on from the off time so the on time is correct. also keep in mind the gap so the note is not cut short
           //                                                                             add back the already exisiting gap
-          IOEOffByteTimer[note] = IOEOffByteTimer[note] - OnTimeMod[note] - 5 + (IOEOffByteTimer[note] - IOEOnByteTimer[note]);
+          IOEOffByteTimer[servo] = IOEOffByteTimer[servo] - OnTimeMod[servo] - 5 + (IOEOffByteTimer[servo] - IOEOnByteTimer[servo]);
         }
       }
       //dbprint("CT:");dbprint(CurrentMillis);dbprint(" IOEOnByteTimer[");dbprint(note);dbprint("] = ");dbprintln(IOEOnByteTimer[note]);
@@ -223,31 +228,22 @@ void MidiNoteOff(byte channel, byte note, byte velocity) //function called when 
   //dbprint("CT:");dbprint(CurrentMillis);dbprint(" MidiNoteOff: ");dbprint(channel);dbprint(", ");dbprintln(note);
   if (channel == RHC or channel == LHC) {
     bool Procede = false;
+    byte servo = 0 ;
     //Serial.println("off note");
     if (channel == LHC) {
       //dbprint("CT:");dbprint(CurrentMillis);dbprintln("channel == LHC");
       if (note >= LPNL and note <= HPNL) //test for playable notes
       {
-        //dbprint("CT:");dbprint(CurrentMillis);dbprintln("note >= LPNL and note <= HPNL");
-        int lefthandnote = note;
-        note = note % 12;
-        if (lefthandnote >= 60 and lefthandnote <= 71) //range for bank 4
-        {
-          //dbprintln("note >= 60 and note <= 71");
-          note = note + 12;
-        }
-        //apply map array
-        note = BassMap[note] + 45; //offset for base servos
+        servo = BassMap[note - LPNL] ; //offset lowest playable note
         Procede = true;
       }
-    } else if (note >= LPNR and note <= HPNR) //test for playable notes
+    } else if (note >= LPNR and note <= HPNR) //test for playable notes on the piano side
     {
-      //dbprint("CT:");dbprint(CurrentMillis);dbprintln("note >= LPNR and note <= HPNR");
-      note = note - LPNR;
+      servo = PianoMap[note - LPNR]; 
       Procede = true;
     }
     if (Procede == true) {
-      IOEOffByteTimer[note] = CurrentMillis + OffTimeMod[note];
+      IOEOffByteTimer[servo] = CurrentMillis + OffTimeMod[servo];
       //dbprint("CT:");dbprint(CurrentMillis);dbprint(" IOEOffByteTimer[");dbprint(note);dbprint("] = ");dbprintln(IOEOffByteTimer[note]);
     }
   }
@@ -363,6 +359,20 @@ int SerialParser()
             dbprint("Servo: ");dbprint(Settings[0]);dbprint(" SCV: ");dbprintln(SCV[Settings[0]]);
           }
           break;
+        case 's': //set the mapping.
+        // mapping array, note, mapping servo
+        //Piano = 0, Bass = 1
+        //s,0,1,50 -- map piano, note 1, servo 50
+          if(Settings[0] == 0)
+          {
+            PianoMap[Settings[1]] = Settings[2];
+          }
+          if(Settings[0] == 1)
+          {
+            BassMap[Settings[1]] = Settings[2];
+          }
+         
+        break;
         case 'm':       //set servo to median position
         //m,servo
           SetGlobalServo(Settings[0],ServoMedian);
@@ -420,8 +430,10 @@ int SerialParser()
         Serial.println("SD Write");
         PublishArrayToSD(SCV,TotalServos,"SCV.txt");
         PublishArrayToSD(SOV,TotalServos,"SOV.txt");
-        PublishArrayToSD(SCV,TotalServos,"SCV.txt");
-        PublishArrayToSD(SCV,TotalServos,"SCV.txt");
+        PublishArrayToSD(OnTimeMod,TotalServos,"ONMod.txt");
+        PublishArrayToSD(OffTimeMod,TotalServos,"OFFMod.txt");
+        PublishArrayToSD(PianoMap,PMapLen,"PMap.txt");
+        PublishArrayToSD(BassMap,BMapLen,"BMap.txt");
         Serial.println("SD Write Done");
       }
   }
@@ -440,6 +452,7 @@ void PrintArrayServos(int Array[], int len)
   }
   Serial.println("");
 }
+
 
 int CommaCount(String input)
 {
@@ -707,6 +720,20 @@ void variablesfromSD()
   createbackup(CurrentFile);
   CurrentFile.close();
   ///////////////////////
+  //Piano Map
+  CurrentFile = SD.open("PMap.txt");
+  dbprint("CurrentFile = ");dbprintln(CurrentFile.name());
+  readintoarray(PianoMap, PMapLen);
+  createbackup(CurrentFile);
+  CurrentFile.close();
+  ///////////////////////
+  //Off Timer Modifiers
+  CurrentFile = SD.open("BMap.txt");
+  dbprint("CurrentFile = ");dbprintln(CurrentFile.name());
+  readintoarray(BassMap, BMapLen);
+  createbackup(CurrentFile);
+  CurrentFile.close();
+  ///////////////////////
   
   //print the arrays
   #ifdef DEBUG
@@ -718,6 +745,10 @@ void variablesfromSD()
     PrintArrayServos(OnTimeMod,TotalServos);
     dbprintln("OffTimeMod:");
     PrintArrayServos(OffTimeMod, TotalServos);
+    dbprintln("BMap:");
+    PrintArrayServos(BassMap,TotalServos);
+    dbprintln("Pmap:");
+    PrintArrayServos(PianoMap, TotalServos);
   #endif
 }
 
@@ -734,6 +765,7 @@ void readintoarray(int arry[], int len)
     i++;
   }
 }
+
 
 
 String sdreadline()
